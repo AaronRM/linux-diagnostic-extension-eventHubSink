@@ -22,7 +22,9 @@ If you are new to template deployment, see:
 
 ## TODO
 
-- [ ] Add LAD to template
-- [ ] Add EH to template
+- [x] Add LAD to template
+- [ ] Use sample config from docs
 - [ ] Add LAD config for EH Sink
+- [ ] Make storage account name a param
+- [ ] Make SAS expiration time a param
 - [ ] Add Deploy to Azure Buttons to Readme
