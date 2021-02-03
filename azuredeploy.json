@@ -95,6 +95,14 @@
         "signedExpiry": "2023-02-01T00:00:01Z",
         "signedResourceTypes": "co"
       }
+    },
+    "eventHubSku": {
+      "type": "string",
+      "defaultValue": "Standard",
+      "allowedValues": [ "Basic", "Standard" ],
+      "metadata": {
+        "description": "Specifies the messaging tier for Event Hub Namespace."
+      }
     }
   },
   "variables": {
@@ -105,6 +113,8 @@
     "subnetAddressPrefix": "10.1.0.0/24",
     "addressPrefix": "10.1.0.0/16",
     "storageAccountName": "aaronmsampleladstorage",
+    "eventHubNamespaceName": "aaronmsampleladehns",
+    "eventHubName": "aaronmsampleladeh",
     "linuxConfiguration": {
       "disablePasswordAuthentication": true,
       "ssh": {
@@ -268,6 +278,34 @@
       }
     },
     {
+      "type": "Microsoft.EventHub/namespaces",
+      "apiVersion": "2018-01-01-preview",
+      "name": "[variables('eventHubNamespaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('eventHubSku')]",
+        "tier": "[parameters('eventHubSku')]",
+        "capacity": 1
+      },
+      "properties": {
+        "isAutoInflateEnabled": false,
+        "maximumThroughputUnits": 0
+      }
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "apiVersion": "2017-04-01",
+      "name": "[concat(variables('eventHubNamespaceName'), '/', variables('eventHubName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubNamespaceName'))]"
+      ],
+      "properties": {
+        "messageRetentionInDays": 7,
+        "partitionCount": 1
+      }
+    },
+    {
       "type": "Microsoft.Compute/virtualMachines/extensions",
       "apiVersion": "2017-12-01",
       "name": "[concat(parameters('vmName'), '/AzureDiagnostics')]",
@@ -276,7 +314,9 @@
       },
       "location": "[resourceGroup().location]",
       "dependsOn": [
-        "[resourceId('Microsoft.Compute/virtualMachines/', parameters('vmName'))]"
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubNamespaceName'), variables('eventHubName'))]",
+        "[resourceId('Microsoft.Compute/virtualMachines/', parameters('vmName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]"
       ],
       "properties": {
         "publisher": "Microsoft.Azure.Diagnostics",
@@ -286,112 +326,116 @@
         "protectedSettings": {
           "storageAccountName": "[variables('storageAccountName')]",
           "storageAccountEndPoint": "https://core.windows.net",
-          "storageAccountSasToken": "[listAccountSas(variables('storageAccountName'), '2019-06-01', parameters('accountSasProperties')).accountSasToken]"
+          "storageAccountSasToken": "[listAccountSas(variables('storageAccountName'), '2019-06-01', parameters('accountSasProperties')).accountSasToken]",
+          "sinksConfig": {
+            "sink": [
+              {
+                "name": "SyslogJsonBlob",
+                "type": "JsonBlob"
+              },
+              {
+                "name": "FilelogJsonBlob",
+                "type": "JsonBlob"
+              },
+              {
+                "name": "LinuxCpuJsonBlob",
+                "type": "JsonBlob"
+              },
+              {
+                "name": "MyJsonMetricsBlob",
+                "type": "JsonBlob"
+              },
+              {
+                "name": "LinuxCpuEventHub",
+                "type": "EventHub",
+                "sasURL": "https://youreventhubnamespace.servicebus.windows.net/youreventhubpublisher?sr=https%3a%2f%2fyoureventhubnamespace.servicebus.windows.net%2fyoureventhubpublisher%2f&sig=fake_signature&se=1808096361&skn=yourehpolicy"
+              },
+              {
+                "name": "MyMetricEventHub",
+                "type": "EventHub",
+                "sasURL": "https://youreventhubnamespace.servicebus.windows.net/youreventhubpublisher?sr=https%3a%2f%2fyoureventhubnamespace.servicebus.windows.net%2fyoureventhubpublisher%2f&sig=yourehpolicy&skn=yourehpolicy"
+              },
+              {
+                "name": "LoggingEventHub",
+                "type": "EventHub",
+                "sasURL": "https://youreventhubnamespace.servicebus.windows.net/youreventhubpublisher?sr=https%3a%2f%2fyoureventhubnamespace.servicebus.windows.net%2fyoureventhubpublisher%2f&sig=yourehpolicy&se=1808096361&skn=yourehpolicy"
+              }
+            ]
+          }
         },
         "settings": {
           "StorageAccount": "[variables('storageAccountName')]",
           "ladCfg": {
+            "sampleRateInSeconds": 15,
             "diagnosticMonitorConfiguration": {
-              "syslogEvents": {},
-              "sampleRateInSeconds": 15,
-              "eventVolume": "Medium",
-              "metrics": {
-                "resourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
-                "metricAggregation": [
-                  { "scheduledTransferPeriod": "PT1H" },
-                  { "scheduledTransferPeriod": "PT1M" }
-                ]
-              },
               "performanceCounters": {
+                "sinks": "MyMetricEventHub,MyJsonMetricsBlob",
                 "performanceCounterConfiguration": [
                   {
+                    "unit": "Percent",
+                    "type": "builtin",
+                    "counter": "PercentProcessorTime",
+                    "counterSpecifier": "/builtin/Processor/PercentProcessorTime",
                     "annotation": [
                       {
-                        "displayName": "Filesystem % free space",
-                        "locale": "en-us"
+                        "locale": "en-us",
+                        "displayName": "Aggregate CPU %utilization"
                       }
                     ],
-                    "class": "filesystem",
                     "condition": "IsAggregate=TRUE",
-                    "counter": "percentfreespace",
-                    "counterSpecifier": "/builtin/filesystem/percentfreespace",
-                    "type": "builtin",
-                    "unit": "Percent"
+                    "class": "Processor"
                   },
                   {
+                    "unit": "Bytes",
+                    "type": "builtin",
+                    "counter": "UsedSpace",
+                    "counterSpecifier": "/builtin/FileSystem/UsedSpace",
                     "annotation": [
                       {
-                        "displayName": "Filesystem % used space",
-                        "locale": "en-us"
+                        "locale": "en-us",
+                        "displayName": "Used disk space on /"
                       }
                     ],
-                    "class": "filesystem",
-                    "condition": "IsAggregate=TRUE",
-                    "counter": "percentusedspace",
-                    "counterSpecifier": "/builtin/filesystem/percentusedspace",
-                    "type": "builtin",
-                    "unit": "Percent"
-                  },
-                  {
-                    "annotation": [
-                      {
-                        "displayName": "Filesystem used space",
-                        "locale": "en-us"
-                      }
-                    ],
-                    "class": "filesystem",
-                    "condition": "IsAggregate=TRUE",
-                    "counter": "usedspace",
-                    "counterSpecifier": "/builtin/filesystem/usedspace",
-                    "type": "builtin",
-                    "unit": "Bytes"
-                  },
-                  {
-                    "annotation": [
-                      {
-                        "displayName": "Filesystem read bytes/sec",
-                        "locale": "en-us"
-                      }
-                    ],
-                    "class": "filesystem",
-                    "condition": "IsAggregate=TRUE",
-                    "counter": "bytesreadpersecond",
-                    "counterSpecifier": "/builtin/filesystem/bytesreadpersecond",
-                    "type": "builtin",
-                    "unit": "CountPerSecond"
-                  },
-                  {
-                    "annotation": [
-                      {
-                        "displayName": "Filesystem free space",
-                        "locale": "en-us"
-                      }
-                    ],
-                    "class": "filesystem",
-                    "condition": "IsAggregate=TRUE",
-                    "counter": "freespace",
-                    "counterSpecifier": "/builtin/filesystem/freespace",
-                    "type": "builtin",
-                    "unit": "Bytes"
-                  },
-                  {
-                    "annotation": [
-                      {
-                        "displayName": "Filesystem % free inodes",
-                        "locale": "en-us"
-                      }
-                    ],
-                    "class": "filesystem",
-                    "condition": "IsAggregate=TRUE",
-                    "counter": "percentfreeinodes",
-                    "counterSpecifier": "/builtin/filesystem/percentfreeinodes",
-                    "type": "builtin",
-                    "unit": "Percent"
+                    "condition": "Name=\"/\"",
+                    "class": "Filesystem"
                   }
                 ]
+              },
+              "metrics": {
+                "metricAggregation": [
+                  {
+                    "scheduledTransferPeriod": "PT1H"
+                  },
+                  {
+                    "scheduledTransferPeriod": "PT1M"
+                  }
+                ],
+                "resourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+              },
+              "eventVolume": "Large",
+              "syslogEvents": {
+                "sinks": "SyslogJsonBlob,LoggingEventHub",
+                "syslogEventConfiguration": {
+                  "LOG_USER": "LOG_INFO"
+                }
               }
             }
-          }
+          },
+          "perfCfg": [
+            {
+              "query": "SELECT PercentProcessorTime, PercentIdleTime FROM SCX_ProcessorStatisticalInformation WHERE Name='_TOTAL'",
+              "table": "LinuxCpu",
+              "frequency": 60,
+              "sinks": "LinuxCpuJsonBlob,LinuxCpuEventHub"
+            }
+          ],
+          "fileLogs": [
+            {
+              "file": "/var/log/myladtestlog",
+              "table": "MyLadTestLog",
+              "sinks": "FilelogJsonBlob,LoggingEventHub"
+            }
+          ]
         }
       }
     }
