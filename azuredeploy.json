@@ -303,7 +303,20 @@
       "properties": {
         "messageRetentionInDays": 7,
         "partitionCount": 1
-      }
+      },
+      "resources": [
+        {
+          "apiVersion": "2017-04-01",
+          "name": "linuxDiagnosticSender",
+          "type": "authorizationRules",
+          "dependsOn": [
+            "[concat('Microsoft.EventHub/namespaces/', variables('eventHubNamespaceName'),'/eventhubs/', variables('eventHubName'))]"
+          ],
+          "properties": {
+            "rights": ["Send"]
+          }
+        }
+      ]
     },
     {
       "type": "Microsoft.Compute/virtualMachines/extensions",
