@@ -35,3 +35,17 @@ In addition to deploying a Linux VM, this template also demonstrates deploying t
 * Collecting custom log file data
 * Collecting performance counters
 * Collecting syslog data
+
+## Usage
+
+To deploy the template via the [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/), customize azuredeploy.parameters.json, then execute the following replacing `<RESOURCE_GROUP>`, `<DEPLOYMENT_NAME>` and `<LOCATION>` with the appropriate values:
+
+``` bash
+az group create --name <RESOURCE_GROUP> --location <LOCATION>
+
+az deployment group create \
+  --name <DEPLOYMENT_NAME> \
+  --resource-group <RESOURCE_GROUP> \
+  --template-file azuredeploy.json \
+  --parameters @azuredeploy.parameters.json
+```
