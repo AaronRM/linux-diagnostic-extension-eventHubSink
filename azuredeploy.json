@@ -114,7 +114,7 @@
     "addressPrefix": "10.1.0.0/16",
     "storageAccountName": "aaronmsampleladstorage",
     "eventHubNamespaceName": "aaronmsampleladehns",
-    "eventHubName": "aaronmsampleladeh",
+    "linuxCpuEventHubName": "linuxCpu",
     "linuxConfiguration": {
       "disablePasswordAuthentication": true,
       "ssh": {
@@ -125,7 +125,25 @@
           }
         ]
       }
-    }
+    },
+    "generateSasTokenScriptContent": "
+          param([string] $ehNamespace, [string] $ehName, [string] $Access_Policy_Name, [string] $Access_Policy_Key)
+          # From https://docs.microsoft.com/en-us/rest/api/eventhub/generate-sas-token#powershell
+          [Reflection.Assembly]::LoadWithPartialName('System.Web')| out-null
+          $URI=\"$ehNamespace.servicebus.windows.net/$ehName\"
+          # $Access_Policy_Name='RootManageSharedAccessKey'
+          # $Access_Policy_Key='myPrimaryKey'
+          # Token expires in 1 year
+          $Expires=([DateTimeOffset]::Now.ToUnixTimeSeconds())+31622400
+          $SignatureString=[System.Web.HttpUtility]::UrlEncode($URI)+ \"`n\" + [string]$Expires
+          $HMAC = New-Object System.Security.Cryptography.HMACSHA256
+          $HMAC.key = [Text.Encoding]::ASCII.GetBytes($Access_Policy_Key)
+          $Signature = $HMAC.ComputeHash([Text.Encoding]::ASCII.GetBytes($SignatureString))
+          $Signature = [Convert]::ToBase64String($Signature)
+          $SASToken = \"sr=\" + [System.Web.HttpUtility]::UrlEncode($URI) + \"&sig=\" + [System.Web.HttpUtility]::UrlEncode($Signature) + \"&se=\" + $Expires + \"&skn=\" + $Access_Policy_Name
+          $DeploymentScriptOutputs = @{}
+          $DeploymentScriptOutputs['SASToken'] = $SASToken
+    "
   },
   "resources": [
     {
@@ -295,7 +313,7 @@
     {
       "type": "Microsoft.EventHub/namespaces/eventhubs",
       "apiVersion": "2017-04-01",
-      "name": "[concat(variables('eventHubNamespaceName'), '/', variables('eventHubName'))]",
+      "name": "[concat(variables('eventHubNamespaceName'), '/', variables('linuxCpuEventHubName'))]",
       "location": "[parameters('location')]",
       "dependsOn": [
         "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubNamespaceName'))]"
@@ -307,16 +325,36 @@
       "resources": [
         {
           "apiVersion": "2017-04-01",
-          "name": "linuxDiagnosticSender",
+          "name": "linuxCpuEventHubSender",
           "type": "authorizationRules",
           "dependsOn": [
-            "[concat('Microsoft.EventHub/namespaces/', variables('eventHubNamespaceName'),'/eventhubs/', variables('eventHubName'))]"
+            "[concat('Microsoft.EventHub/namespaces/', variables('eventHubNamespaceName'),'/eventhubs/', variables('linuxCpuEventHubName'))]"
           ],
           "properties": {
             "rights": ["Send"]
           }
         }
       ]
+    },
+    {
+      // The following resource runs a small Powershell snippet to generate a SAS Token from the EventHub key
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2020-10-01",
+      "name": "generateLinuxCpuSASTokenScript",
+      "location": "[resourceGroup().location]",
+      "kind": "AzurePowerShell",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'))]"
+      ],
+      "properties": {
+        "forceUpdateTag": "1", // Force this script to execute every time
+        "azPowerShellVersion": "3.0",
+        "arguments": "[concat('-ehNamespace \\\"', variables('eventHubNamespaceName'), '\\\" -ehName \\\"', variables('linuxCpuEventHubName'), '\\\" -Access_Policy_Name \\\"', 'linuxCpuEventHubSender', '\\\" -Access_Policy_Key \\\"', listkeys(resourceId('Microsoft.EventHub/namespaces/eventhubs/authorizationRules', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'), 'linuxCpuEventHubSender'), '2017-04-01').primaryKey, '\\\"')]",
+        "scriptContent": "[variables('generateSasTokenScriptContent')]",
+        "timeout": "PT10S",
+        "cleanupPreference": "Always",
+        "retentionInterval": "PT1H"
+      }
     },
     {
       "type": "Microsoft.Compute/virtualMachines/extensions",
@@ -327,7 +365,8 @@
       },
       "location": "[resourceGroup().location]",
       "dependsOn": [
-        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubNamespaceName'), variables('eventHubName'))]",
+        "[resourceId('Microsoft.Resources/deploymentScripts', 'generateLinuxCpuSASTokenScript')]",
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'))]",
         "[resourceId('Microsoft.Compute/virtualMachines/', parameters('vmName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]"
       ],
@@ -361,17 +400,7 @@
               {
                 "name": "LinuxCpuEventHub",
                 "type": "EventHub",
-                "sasURL": "https://youreventhubnamespace.servicebus.windows.net/youreventhubpublisher?sr=https%3a%2f%2fyoureventhubnamespace.servicebus.windows.net%2fyoureventhubpublisher%2f&sig=fake_signature&se=1808096361&skn=yourehpolicy"
-              },
-              {
-                "name": "MyMetricEventHub",
-                "type": "EventHub",
-                "sasURL": "https://youreventhubnamespace.servicebus.windows.net/youreventhubpublisher?sr=https%3a%2f%2fyoureventhubnamespace.servicebus.windows.net%2fyoureventhubpublisher%2f&sig=yourehpolicy&skn=yourehpolicy"
-              },
-              {
-                "name": "LoggingEventHub",
-                "type": "EventHub",
-                "sasURL": "https://youreventhubnamespace.servicebus.windows.net/youreventhubpublisher?sr=https%3a%2f%2fyoureventhubnamespace.servicebus.windows.net%2fyoureventhubpublisher%2f&sig=yourehpolicy&se=1808096361&skn=yourehpolicy"
+                "sasURL": "[concat('https://', variables('eventHubNamespaceName') ,'.servicebus.windows.net/', variables('linuxCpuEventHubName'), '?', reference('generateLinuxCpuSASTokenScript').outputs.SASToken)]"
               }
             ]
           }
@@ -382,7 +411,7 @@
             "sampleRateInSeconds": 15,
             "diagnosticMonitorConfiguration": {
               "performanceCounters": {
-                "sinks": "MyMetricEventHub,MyJsonMetricsBlob",
+                "sinks": "MyJsonMetricsBlob",
                 "performanceCounterConfiguration": [
                   {
                     "unit": "Percent",
@@ -427,7 +456,7 @@
               },
               "eventVolume": "Large",
               "syslogEvents": {
-                "sinks": "SyslogJsonBlob,LoggingEventHub",
+                "sinks": "SyslogJsonBlob",
                 "syslogEventConfiguration": {
                   "LOG_USER": "LOG_INFO"
                 }
@@ -446,7 +475,7 @@
             {
               "file": "/var/log/myladtestlog",
               "table": "MyLadTestLog",
-              "sinks": "FilelogJsonBlob,LoggingEventHub"
+              "sinks": "FilelogJsonBlob"
             }
           ]
         }
