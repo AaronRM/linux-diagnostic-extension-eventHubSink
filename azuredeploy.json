@@ -39,6 +39,13 @@
         "description": "Unique DNS Name for the Public IP used to access the Virtual Machine."
       }
     },
+    "storageAccountName": {
+      "type": "string",
+      "defaultValue": "[toLower(concat('ladstorage', uniqueString(resourceGroup().id)))]",
+      "metadata": {
+        "description": "Globally Unique Name for the Azure Storage Account."
+      }
+    },
     "ubuntuOSVersion": {
       "type": "string",
       "defaultValue": "18.04-LTS",
@@ -92,6 +99,7 @@
       "defaultValue": {
         "signedServices": "bt",
         "signedPermission": "acluw",
+        // Defines the expiration date for the SAS token for account storage
         "signedExpiry": "2023-02-01T00:00:01Z",
         "signedResourceTypes": "co"
       }
@@ -112,9 +120,9 @@
     "osDiskType": "Standard_LRS",
     "subnetAddressPrefix": "10.1.0.0/24",
     "addressPrefix": "10.1.0.0/16",
-    "storageAccountName": "aaronmsampleladstorage",
     "eventHubNamespaceName": "aaronmsampleladehns",
     "linuxCpuEventHubName": "linuxCpu",
+    "linuxCpuEventHubSenderAuthRuleName": "[concat(variables('linuxCpuEventHubName'), 'Sender')]",
     "linuxConfiguration": {
       "disablePasswordAuthentication": true,
       "ssh": {
@@ -125,25 +133,7 @@
           }
         ]
       }
-    },
-    "generateSasTokenScriptContent": "
-          param([string] $ehNamespace, [string] $ehName, [string] $Access_Policy_Name, [string] $Access_Policy_Key)
-          # From https://docs.microsoft.com/en-us/rest/api/eventhub/generate-sas-token#powershell
-          [Reflection.Assembly]::LoadWithPartialName('System.Web')| out-null
-          $URI=\"$ehNamespace.servicebus.windows.net/$ehName\"
-          # $Access_Policy_Name='RootManageSharedAccessKey'
-          # $Access_Policy_Key='myPrimaryKey'
-          # Token expires in 1 year
-          $Expires=([DateTimeOffset]::Now.ToUnixTimeSeconds())+31622400
-          $SignatureString=[System.Web.HttpUtility]::UrlEncode($URI)+ \"`n\" + [string]$Expires
-          $HMAC = New-Object System.Security.Cryptography.HMACSHA256
-          $HMAC.key = [Text.Encoding]::ASCII.GetBytes($Access_Policy_Key)
-          $Signature = $HMAC.ComputeHash([Text.Encoding]::ASCII.GetBytes($SignatureString))
-          $Signature = [Convert]::ToBase64String($Signature)
-          $SASToken = \"sr=\" + [System.Web.HttpUtility]::UrlEncode($URI) + \"&sig=\" + [System.Web.HttpUtility]::UrlEncode($Signature) + \"&se=\" + $Expires + \"&skn=\" + $Access_Policy_Name
-          $DeploymentScriptOutputs = @{}
-          $DeploymentScriptOutputs['SASToken'] = $SASToken
-    "
+    }
   },
   "resources": [
     {
@@ -240,12 +230,13 @@
         "idleTimeoutInMinutes": 4
       }
     },
+    // Defines the storage account which Linux Azure Diagnostics will be configured to use
     {
-      "name": "[variables('storageAccountName')]",
+      "name": "[parameters('storageAccountName')]",
       "type": "Microsoft.Storage/storageAccounts",
       "apiVersion": "2019-06-01",
       "tags": {
-        "displayName": "[variables('storageAccountName')]"
+        "displayName": "[parameters('storageAccountName')]"
       },
       "location": "[resourceGroup().location]",
       "kind": "StorageV2",
@@ -295,6 +286,7 @@
         }
       }
     },
+    // Defines the Event Hub Namespace which will contain the Event Hub instance
     {
       "type": "Microsoft.EventHub/namespaces",
       "apiVersion": "2018-01-01-preview",
@@ -308,36 +300,57 @@
       "properties": {
         "isAutoInflateEnabled": false,
         "maximumThroughputUnits": 0
-      }
-    },
-    {
-      "type": "Microsoft.EventHub/namespaces/eventhubs",
-      "apiVersion": "2017-04-01",
-      "name": "[concat(variables('eventHubNamespaceName'), '/', variables('linuxCpuEventHubName'))]",
-      "location": "[parameters('location')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubNamespaceName'))]"
-      ],
-      "properties": {
-        "messageRetentionInDays": 7,
-        "partitionCount": 1
       },
       "resources": [
+        // Defines the Event Hub instance
         {
+          "type": "eventhubs",
           "apiVersion": "2017-04-01",
-          "name": "linuxCpuEventHubSender",
-          "type": "authorizationRules",
+          "name": "[variables('linuxCpuEventHubName')]",
+          "location": "[parameters('location')]",
           "dependsOn": [
-            "[concat('Microsoft.EventHub/namespaces/', variables('eventHubNamespaceName'),'/eventhubs/', variables('linuxCpuEventHubName'))]"
+            "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubNamespaceName'))]"
           ],
           "properties": {
-            "rights": ["Send"]
-          }
+            "messageRetentionInDays": 7,
+            "partitionCount": 1
+          },
+          "resources": [
+            /* 
+            *  Creates an authorization rule on the Event Hub. Adding "Send" rights to the rule
+            *  allows events to be sent to the Event Hub.
+            *
+            *  Later in the template, we will use the PrimaryKey from this rule to generate  
+            *  a SAS Token URL which the Linux Azure Diagnostics extension will need for authorization
+            *  when sending events to the Event Hub.
+            */ 
+            {
+              "apiVersion": "2017-04-01",
+              "name": "[variables('linuxCpuEventHubSenderAuthRuleName')]",
+              "type": "authorizationRules",
+              "dependsOn": [
+                "[variables('linuxCpuEventHubName')]"
+              ],
+              "properties": {
+                "rights": [ "Send" ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      // The following resource runs a small Powershell snippet to generate a SAS Token from the EventHub key
+      /*
+        Use a Powershell script to generate a SAS Token from the PrimaryKey of the Authorization Rule in the Event Hub
+        we created. The script contents are defined near the beginning of the template in a variable.
+
+        For more on generating Event Hub SAS Tokens to use with Linux Azure Diagostics see:
+        * https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/diagnostics-linux#the-eventhub-sink
+        * https://docs.microsoft.com/en-us/rest/api/eventhub/generate-sas-token
+
+        For more on using Deployment Scripts in ARM templates see: 
+        * https://docs.microsoft.com/en-us/azure/azure-resource-manager/templates/deployment-script-template
+      */
       "type": "Microsoft.Resources/deploymentScripts",
       "apiVersion": "2020-10-01",
       "name": "generateLinuxCpuSASTokenScript",
@@ -349,13 +362,35 @@
       "properties": {
         "forceUpdateTag": "1", // Force this script to execute every time
         "azPowerShellVersion": "3.0",
-        "arguments": "[concat('-ehNamespace \\\"', variables('eventHubNamespaceName'), '\\\" -ehName \\\"', variables('linuxCpuEventHubName'), '\\\" -Access_Policy_Name \\\"', 'linuxCpuEventHubSender', '\\\" -Access_Policy_Key \\\"', listkeys(resourceId('Microsoft.EventHub/namespaces/eventhubs/authorizationRules', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'), 'linuxCpuEventHubSender'), '2017-04-01').primaryKey, '\\\"')]",
-        "scriptContent": "[variables('generateSasTokenScriptContent')]",
+        /*
+        Use the listKeys ARM template function to fetch the primaryKey from the Event Hub Authorization Rule and 
+        use it as a parameter when invoking the Powershell function.
+        */
+        "arguments": "[concat('-ehNamespace \\\"', variables('eventHubNamespaceName'), '\\\" -ehName \\\"', variables('linuxCpuEventHubName'), '\\\" -Access_Policy_Name \\\"', variables('linuxCpuEventHubSenderAuthRuleName'), '\\\" -Access_Policy_Key \\\"', listkeys(resourceId('Microsoft.EventHub/namespaces/eventhubs/authorizationRules', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'), variables('linuxCpuEventHubSenderAuthRuleName')), '2017-04-01').primaryKey, '\\\"')]",
+        "scriptContent": "
+          param([string] $ehNamespace, [string] $ehName, [string] $Access_Policy_Name, [string] $Access_Policy_Key)
+          # Script based on https://docs.microsoft.com/en-us/rest/api/eventhub/generate-sas-token#powershell
+
+          [Reflection.Assembly]::LoadWithPartialName('System.Web')| out-null
+          $URI=\"$ehNamespace.servicebus.windows.net/$ehName\"
+
+          # Token expires in 1 year
+          $Expires=([DateTimeOffset]::Now.ToUnixTimeSeconds())+31622400
+          $SignatureString=[System.Web.HttpUtility]::UrlEncode($URI)+ \"`n\" + [string]$Expires
+          $HMAC = New-Object System.Security.Cryptography.HMACSHA256
+          $HMAC.key = [Text.Encoding]::ASCII.GetBytes($Access_Policy_Key)
+          $Signature = $HMAC.ComputeHash([Text.Encoding]::ASCII.GetBytes($SignatureString))
+          $Signature = [Convert]::ToBase64String($Signature)
+          $SASToken = \"sr=\" + [System.Web.HttpUtility]::UrlEncode($URI) + \"&sig=\" + [System.Web.HttpUtility]::UrlEncode($Signature) + \"&se=\" + $Expires + \"&skn=\" + $Access_Policy_Name
+          $DeploymentScriptOutputs = @{}
+          $DeploymentScriptOutputs['SASToken'] = $SASToken
+        ",
         "timeout": "PT10S",
         "cleanupPreference": "Always",
         "retentionInterval": "PT1H"
       }
     },
+    // Defines the AzureDiagnostics extension for the VM.
     {
       "type": "Microsoft.Compute/virtualMachines/extensions",
       "apiVersion": "2017-12-01",
@@ -364,21 +399,32 @@
         "displayName": "AzureDiagnostics"
       },
       "location": "[resourceGroup().location]",
+      // Prior to setting up the Linux Azure Diagnostics extension, we must first set up:
+      // * The virtual machine it will be installed on.
+      // * The storage account to use for Table/Blob storage
+      // * The script which will generate the SAS Token required for sending to the Event Hub sink.
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deploymentScripts', 'generateLinuxCpuSASTokenScript')]",
-        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'))]",
         "[resourceId('Microsoft.Compute/virtualMachines/', parameters('vmName'))]",
-        "[resourceId('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]"
+        "[resourceId('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))]",
+        "[resourceId('Microsoft.Resources/deploymentScripts', 'generateLinuxCpuSASTokenScript')]"
       ],
+      // Define details of the VM Extension to install
       "properties": {
         "publisher": "Microsoft.Azure.Diagnostics",
         "type": "LinuxDiagnostic",
         "autoUpgradeMinorVersion": true,
         "typeHandlerVersion": "3.0",
+        // Defines the protectedSettings for LAD installation. For more information on LAD protectedSettings see:
+        // * https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/diagnostics-linux#protected-settings
         "protectedSettings": {
-          "storageAccountName": "[variables('storageAccountName')]",
+          "storageAccountName": "[parameters('storageAccountName')]",
           "storageAccountEndPoint": "https://core.windows.net",
-          "storageAccountSasToken": "[listAccountSas(variables('storageAccountName'), '2019-06-01', parameters('accountSasProperties')).accountSasToken]",
+          // Use the listAccountSas ARM template function to generate a SAS token for access to Table/Blob storage.
+          // The expiration date for the token depends on what is defined in the accountSasProperties parameter.
+          // For more information on using the listAccountSas function see:
+          // * https://docs.microsoft.com/en-us/azure/azure-resource-manager/templates/template-functions-resource?tabs=json#list
+          // * https://docs.microsoft.com/en-us/rest/api/storagerp/storageaccounts/listaccountsas
+          "storageAccountSasToken": "[listAccountSas(parameters('storageAccountName'), '2019-06-01', parameters('accountSasProperties')).accountSasToken]",
           "sinksConfig": {
             "sink": [
               {
@@ -400,13 +446,23 @@
               {
                 "name": "LinuxCpuEventHub",
                 "type": "EventHub",
+                // Construct the complete sasURL required for writing to the event hub. Refer to the output of the
+                // generateLinuxCpuSASTokenScript to get the SAS Token part of the URL.
+                //
+                // For more info on the sasURL format see:
+                // * https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/diagnostics-linux#the-eventhub-sink
                 "sasURL": "[concat('https://', variables('eventHubNamespaceName') ,'.servicebus.windows.net/', variables('linuxCpuEventHubName'), '?', reference('generateLinuxCpuSASTokenScript').outputs.SASToken)]"
               }
             ]
           }
         },
+        // Defines the public settings for LAD installation. For more information on LAD public settings see:
+        // * https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/diagnostics-linux#public-settings
+        //
+        // The settings are based on the example LAD 3.0 configuration:
+        // * https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/diagnostics-linux#an-example-lad-30-configuration
         "settings": {
-          "StorageAccount": "[variables('storageAccountName')]",
+          "StorageAccount": "[parameters('storageAccountName')]",
           "ladCfg": {
             "sampleRateInSeconds": 15,
             "diagnosticMonitorConfiguration": {
@@ -452,6 +508,7 @@
                     "scheduledTransferPeriod": "PT1M"
                   }
                 ],
+                // resourceId property must be set to the resourceId of the virtual machine
                 "resourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
               },
               "eventVolume": "Large",
@@ -471,6 +528,8 @@
               "sinks": "LinuxCpuJsonBlob,LinuxCpuEventHub"
             }
           ],
+          // Configure LAD to tail the file /var/log/myladtestlog and upload it 
+          // to the MyLadTestLog Azure table and the FilelogJsonBlob
           "fileLogs": [
             {
               "file": "/var/log/myladtestlog",
