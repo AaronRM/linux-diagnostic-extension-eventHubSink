@@ -46,6 +46,13 @@
         "description": "Globally Unique Name for the Azure Storage Account."
       }
     },
+    "eventHubNamespaceName": {
+      "type": "string",
+      "defaultValue": "[toLower(concat('ladehns', uniqueString(resourceGroup().id)))]",
+      "metadata": {
+        "description": "Globally Unique Name for the Event Hub Namespace."
+      }
+    },
     "ubuntuOSVersion": {
       "type": "string",
       "defaultValue": "18.04-LTS",
@@ -120,7 +127,6 @@
     "osDiskType": "Standard_LRS",
     "subnetAddressPrefix": "10.1.0.0/24",
     "addressPrefix": "10.1.0.0/16",
-    "eventHubNamespaceName": "aaronmsampleladehns",
     "linuxCpuEventHubName": "linuxCpu",
     "linuxCpuEventHubSenderAuthRuleName": "[concat(variables('linuxCpuEventHubName'), 'Sender')]",
     "linuxConfiguration": {
@@ -290,7 +296,7 @@
     {
       "type": "Microsoft.EventHub/namespaces",
       "apiVersion": "2018-01-01-preview",
-      "name": "[variables('eventHubNamespaceName')]",
+      "name": "[parameters('eventHubNamespaceName')]",
       "location": "[parameters('location')]",
       "sku": {
         "name": "[parameters('eventHubSku')]",
@@ -309,7 +315,7 @@
           "name": "[variables('linuxCpuEventHubName')]",
           "location": "[parameters('location')]",
           "dependsOn": [
-            "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubNamespaceName'))]"
+            "[resourceId('Microsoft.EventHub/namespaces', parameters('eventHubNamespaceName'))]"
           ],
           "properties": {
             "messageRetentionInDays": 7,
@@ -357,7 +363,7 @@
       "location": "[resourceGroup().location]",
       "kind": "AzurePowerShell",
       "dependsOn": [
-        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'))]"
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', parameters('eventHubNamespaceName'), variables('linuxCpuEventHubName'))]"
       ],
       "properties": {
         "forceUpdateTag": "1", // Force this script to execute every time
@@ -366,7 +372,7 @@
         Use the listKeys ARM template function to fetch the primaryKey from the Event Hub Authorization Rule and 
         use it as a parameter when invoking the Powershell function.
         */
-        "arguments": "[concat('-ehNamespace \\\"', variables('eventHubNamespaceName'), '\\\" -ehName \\\"', variables('linuxCpuEventHubName'), '\\\" -Access_Policy_Name \\\"', variables('linuxCpuEventHubSenderAuthRuleName'), '\\\" -Access_Policy_Key \\\"', listkeys(resourceId('Microsoft.EventHub/namespaces/eventhubs/authorizationRules', variables('eventHubNamespaceName'), variables('linuxCpuEventHubName'), variables('linuxCpuEventHubSenderAuthRuleName')), '2017-04-01').primaryKey, '\\\"')]",
+        "arguments": "[concat('-ehNamespace \\\"', parameters('eventHubNamespaceName'), '\\\" -ehName \\\"', variables('linuxCpuEventHubName'), '\\\" -Access_Policy_Name \\\"', variables('linuxCpuEventHubSenderAuthRuleName'), '\\\" -Access_Policy_Key \\\"', listkeys(resourceId('Microsoft.EventHub/namespaces/eventhubs/authorizationRules', parameters('eventHubNamespaceName'), variables('linuxCpuEventHubName'), variables('linuxCpuEventHubSenderAuthRuleName')), '2017-04-01').primaryKey, '\\\"')]",
         "scriptContent": "
           param([string] $ehNamespace, [string] $ehName, [string] $Access_Policy_Name, [string] $Access_Policy_Key)
           # Script based on https://docs.microsoft.com/en-us/rest/api/eventhub/generate-sas-token#powershell
@@ -451,7 +457,7 @@
                 //
                 // For more info on the sasURL format see:
                 // * https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/diagnostics-linux#the-eventhub-sink
-                "sasURL": "[concat('https://', variables('eventHubNamespaceName') ,'.servicebus.windows.net/', variables('linuxCpuEventHubName'), '?', reference('generateLinuxCpuSASTokenScript').outputs.SASToken)]"
+                "sasURL": "[concat('https://', parameters('eventHubNamespaceName') ,'.servicebus.windows.net/', variables('linuxCpuEventHubName'), '?', reference('generateLinuxCpuSASTokenScript').outputs.SASToken)]"
               }
             ]
           }

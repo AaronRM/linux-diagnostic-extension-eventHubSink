@@ -36,5 +36,4 @@ In addition to deploying a Linux VM, this template also demonstrates deploying t
 
 ## TODO
 
-- [ ] Make event hub name a param
 - [ ] Add Deploy to Azure Buttons to Readme
