@@ -1,5 +1,9 @@
 # LAD 3.x EventHub Sink
 
+[![Deploy To Azure](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazure.svg?sanitize=true)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAaronRM%2Flad-3.0-eventHubSink%2Fmain%2Fazuredeploy.json%3Ftoken%3DAADKZ6FXNI7AAVVSF2BOMX3ADQ3VE)
+[![Deploy To Azure Gov](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazuregov.svg?sanitize=true)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAaronRM%2Flad-3.0-eventHubSink%2Fmain%2Fazuredeploy.json%3Ftoken%3DAADKZ6FXNI7AAVVSF2BOMX3ADQ3VE)
+[![Visualize](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/visualizebutton.svg?sanitize=true)](http://armviz.io/#/?load=https%3A%2F%2Fraw.githubusercontent.com%2FAaronRM%2Flad-3.0-eventHubSink%2Fmain%2Fazuredeploy.json%3Ftoken%3DAADKZ6FXNI7AAVVSF2BOMX3ADQ3VE)
+
 A sample Azure Resource Manager (ARM) template demonstrating using an Azure Storage Account and EventHub Sink with Linux Azure Diagnostics (LAD) VM Extension 3.x.
 
 This template is based on the [Very simple deployment of a Linux Ubuntu VM](https://github.com/Azure/azure-quickstart-templates/tree/master/101-vm-simple-linux) sample template.
@@ -33,7 +37,3 @@ In addition to deploying a Linux VM, this template also demonstrates deploying t
 * Collecting custom log file data
 * Collecting performance counters
 * Collecting syslog data
-
-## TODO
-
-- [ ] Add Deploy to Azure Buttons to Readme
